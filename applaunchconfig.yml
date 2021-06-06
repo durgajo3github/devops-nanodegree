@@ -1,0 +1,185 @@
+Description: >
+     project 2 / Udacity 2021 Durga B
+#    // Parameters
+
+Parameters:
+
+    EnvironmentName:
+        Description: An environment name that will be prefixed to resource names check ename.json
+        Type: String
+#  resource setup
+#  1) create LB and webservice security groups
+Resources:
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our load balancer
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts and SSH from local only
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+
+# web app launch configuration
+# user role for S3 is a IAM role created just for this project
+# echo "Project app server started @8080" > index.html 
+  WebAppLaunchConfig:
+      Type: AWS::AutoScaling::LaunchConfiguration
+      Properties:
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            apt-get update -y
+            apt-get install unzip awscli -y
+            apt-get install apache2 -y
+            systemctl start apache2.service
+            cd /var/www/html
+            aws s3 cp s3://durgaudagramp2/udagram.zip .
+            unzip -o udagram.zip            
+        ImageId: ami-0ac73f33a1888c64a
+        IamInstanceProfile:
+          Fn::ImportValue: !Sub '${EnvironmentName}-IAM-ROLE'
+        SecurityGroups:
+        - Ref: WebServerSecGroup
+        InstanceType: t3.medium
+        BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+
+# autoscaling group
+
+  WebAppGroup:
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties:
+        VPCZoneIdentifier:
+        - Fn::ImportValue: 
+            !Sub "${EnvironmentName}-PRIV-NETS"
+        LaunchConfigurationName:
+          Ref: WebAppLaunchConfig
+        MinSize: '2'
+        MaxSize: '4'
+        TargetGroupARNs:
+        - Ref: WebAppTargetGroup        
+
+# load balancer for web app
+
+  WebAppLB:
+      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+      Properties:
+        Subnets:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+        SecurityGroups:
+        - Ref: LBSecGroup
+  Listener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: WebAppTargetGroup
+        LoadBalancerArn:
+          Ref: WebAppLB
+        Port: '80'
+        Protocol: HTTP
+  ALBListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref 'WebAppTargetGroup'
+        Condition:./
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref 'Listener'
+        Priority: 1
+
+# we target group for loadbalancer please note that port is 80 becasue AWS ubunto is by defaulting 80 not 8080
+# 
+  WebAppTargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        HealthCheckIntervalSeconds: 10
+        HealthCheckPath: /
+        HealthCheckProtocol: HTTP
+        HealthCheckTimeoutSeconds: 8
+        HealthyThresholdCount: 2
+        Port: 80
+        Protocol: HTTP
+        UnhealthyThresholdCount: 5
+        VpcId: 
+          Fn::ImportValue:
+            Fn::Sub: "${EnvironmentName}-VPCID"        
+
+
+# CloudFront for a simple URL   ( not part of project but just to try this out as per my design )
+# after running the script go to cloud front in consul to get URL
+# the actual project is inside udagram folder so udagram/index.html  otherwise default apache/ubunto page will be shown
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt [WebAppLB, DNSName]
+            Id: !GetAtt [WebAppLB, DNSName]
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+        Enabled: 'true'
+        DefaultRootObject: udagram/index.html
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+            Locations: []
+        DefaultCacheBehavior:
+          AllowedMethods: [HEAD, GET]
+          MinTTL: '0'
+          MaxTTL: '0'
+          DefaultTTL: '0'
+          TargetOriginId: !GetAtt [WebAppLB, DNSName]
+          SmoothStreaming: 'false'
+          ForwardedValues:
+            QueryString: 'true'
+          ViewerProtocolPolicy: allow-all
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: 'true'
+
+# output for adding HTTP in the final load balancer URL
+# this si just for project requirement / i ahve configured a cloud front url for the actual site
+
+Outputs:
+  WebsiteURL:
+    Value: !Join [ "", [ "http://", !GetAtt WebAppLB.DNSName ,"/udagram"] ]
+    Description: Application URL
