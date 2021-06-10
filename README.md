@@ -20,5 +20,6 @@ To create the infrastructure stack run the following commands in the same order 
 Verify deployment
 To check whether the web application is running, follow the web application public URL, which could be found in output exports of pplaunchconfig cloud formation stack.
 
-Output(working URL to verify the webapp):
-http://udagr-webap-axhozo1hqolm-483606527.us-west-2.elb.amazonaws.com/
+Output(working cloudfront URL to verify the webapp):
+------------------
+http://d2qy7q87wpa06e.cloudfront.net/
